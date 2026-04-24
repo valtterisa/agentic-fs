@@ -1,0 +1,29 @@
+{
+  "name": "vfs-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "start": "bun src/server.ts",
+    "index": "bun scripts/index-demo-docs.ts",
+    "bootstrap": "bun scripts/bootstrap.ts",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.71",
+    "@qdrant/js-client-rest": "^1.17.0",
+    "ai": "^6.0.168",
+    "elysia": "^1.4.28",
+    "just-bash": "^2.14.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "redis": "^4.7.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "bun-types": "^1.3.13"
+  }
+}

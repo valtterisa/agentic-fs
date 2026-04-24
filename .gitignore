@@ -1,0 +1,7 @@
+node_modules
+.env.local
+.env
+data/runtime
+*.db
+*.db-shm
+*.db-wal

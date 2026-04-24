@@ -1,0 +1,8 @@
+{
+  "/": ["kb", "workspace", "memory", "scratch", "tools"],
+  "/kb": ["docs", "guides", "api"],
+  "/kb/docs": ["intro.md", "architecture.md"],
+  "/kb/guides": ["search.md", "grep.md"],
+  "/kb/api": ["endpoints.md"]
+}
+
