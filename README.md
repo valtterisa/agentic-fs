@@ -4,6 +4,8 @@
 
 `vfs-demo` is an AI chat assistant that answers questions by using filesystem tools against a controlled virtual filesystem.
 
+Core idea: use a virtual filesystem with POSIX-like commands instead of giving the model a real sandboxed machine.
+
 The virtual filesystem is hybrid:
 - `/kb` is read-only knowledge loaded from local files (`data/kb`)
 - `/workspace`, `/memory`, `/scratch` are writable and stored in SQLite per tenant
@@ -19,6 +21,30 @@ This project makes answers traceable and safer:
 - **Deterministic**: answers can be grounded in exact file reads, not just model memory
 - **Safer by default**: access is constrained to virtual roots with role-based permissions
 - **Lower complexity**: no mandatory vector DB or embedding pipeline for core usage
+- **Lower cost than full sandboxes**: no per-session VM/container sandbox required for common file tasks
+
+## Filesystem illusion model
+
+This system intentionally gives the LLM a filesystem illusion that is:
+
+- useful enough to solve tasks
+- constrained enough to stay safe
+- auditable enough to trust
+
+In this project, that illusion is built with:
+
+- POSIX-like tool names (`ls`, `cat`, `grep`, `find`, `write`, `mkdir`, `rm`)
+- path semantics (`/kb`, `/workspace`, relative paths via `cwd`)
+- realistic error behavior (`ENOENT`, `EACCES`, `EROFS`)
+- persistent writable state (SQLite-backed virtual files)
+- real read-only knowledge source (`data/kb`)
+
+Why this is better than direct filesystem access in many products:
+
+- smaller blast radius (access only to allowed virtual roots)
+- easier policy enforcement and auditing
+- predictable, testable behavior for agent actions
+- lower infra spend compared with running isolated compute sandboxes per interaction
 
 ## Example use cases
 
