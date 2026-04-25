@@ -1,20 +1,14 @@
 import { Elysia, t } from "elysia";
 import { stepCountIs, tool, ToolLoopAgent } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
-import { Bash } from "just-bash";
 import { z } from "zod";
 import { openDatabase } from "./sqlite";
-import { openRedis } from "./redis";
-import { createQdrant } from "./qdrant";
 import { HybridFileSystem } from "./hybrid-fs";
 import { AuditLog } from "./audit";
 import type { Role, SessionContext } from "./types";
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  REDIS_URL: z.string().default("redis://localhost:6379"),
-  QDRANT_URL: z.string().default("http://localhost:6333"),
-  QDRANT_COLLECTION: z.string().default("vfs_demo_docs"),
   SQLITE_PATH: z.string().default("./data/runtime/vfs-demo.db"),
   DEFAULT_ROLE: z.enum(["admin", "editor", "viewer"]).default("admin"),
   ANTHROPIC_API_KEY: z.string().optional(),
@@ -23,10 +17,7 @@ const envSchema = z.object({
 const env = envSchema.parse(process.env);
 
 const db = openDatabase(env.SQLITE_PATH);
-const redis = await openRedis(env.REDIS_URL);
-const qdrant = createQdrant(env.QDRANT_URL);
-const fs = new HybridFileSystem(db, redis, qdrant, env.QDRANT_COLLECTION);
-await fs.warmPathTree();
+const fs = new HybridFileSystem(db);
 const audit = new AuditLog(db);
 
 function headerValue(
@@ -69,7 +60,7 @@ function logEvent(
 
 function createOperations(
   ctx: SessionContext,
-  source: "api" | "agent" = "api",
+  source = "api",
 ) {
   return {
     ls: async (path?: string) => {
@@ -80,6 +71,32 @@ function createOperations(
         return { cwd: ctx.cwd, path: target, entries };
       } catch (error) {
         logEvent(ctx, "ls", target, "error", {
+          error: (error as Error).message,
+          source,
+        });
+        throw error;
+      }
+    },
+    mkdir: async (path: string) => {
+      try {
+        await fs.mkdir(ctx, path);
+        logEvent(ctx, "mkdir", path, "ok", { source });
+        return { ok: true, path };
+      } catch (error) {
+        logEvent(ctx, "mkdir", path, "error", {
+          error: (error as Error).message,
+          source,
+        });
+        throw error;
+      }
+    },
+    rm: async (path: string) => {
+      try {
+        await fs.rm(ctx, path);
+        logEvent(ctx, "rm", path, "ok", { source });
+        return { ok: true, path };
+      } catch (error) {
+        logEvent(ctx, "rm", path, "error", {
           error: (error as Error).message,
           source,
         });
@@ -163,100 +180,41 @@ function createOperations(
 
 function createAgentTools(ctx: SessionContext) {
   const ops = createOperations(ctx, "agent");
-  let bashPromise: Promise<Bash> | null = null;
-  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-
-  const initBash = async (): Promise<Bash> => {
-    const roots = ["/kb", "/workspace", "/memory", "/scratch"];
-    const files: Record<string, string> = {};
-    for (const root of roots) {
-      const discovered = await ops.find(root).catch(() => ({ results: [] as string[] }));
-      for (const path of discovered.results) {
-        const file = await ops.cat(path).catch(() => null);
-        if (file?.content) files[path] = file.content;
-      }
-    }
-    return new Bash({
-      files,
-      cwd: "/",
-      env: {
-        HOME: "/home/user",
-        USER: "agent",
-        TENANT_ID: ctx.tenantId,
-        AGENT_USER_ID: ctx.userId,
-        AGENT_ROLE: ctx.role,
-      },
-      executionLimits: {
-        maxCallDepth: 80,
-        maxCommandCount: 5000,
-        maxLoopIterations: 5000,
-        maxAwkIterations: 5000,
-        maxSedIterations: 5000,
-      },
-    });
-  };
-
-  const getBash = async (): Promise<Bash> => {
-    if (!bashPromise) bashPromise = initBash();
-    return bashPromise;
-  };
-
-  const syncWritableBack = async (bash: Bash): Promise<void> => {
-    const scan = await bash.exec("find /workspace /memory /scratch -type f 2>/dev/null");
-    if (!scan.stdout.trim()) return;
-    const paths = scan.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    for (const path of paths) {
-      const read = await bash.exec(`cat ${quote(path)}`);
-      if (read.exitCode === 0) {
-        await ops.write(path, read.stdout);
-      }
-    }
-  };
   return {
-    bash: tool({
-      description:
-        "Run shell commands in a sandboxed POSIX environment (use for ls, cd, cat, grep, find, pipes, redirection, and text processing).",
-      inputSchema: z.object({
-        command: z.string().min(1),
-        cwd: z.string().optional(),
-        stdin: z.string().optional(),
-        args: z.array(z.string()).optional(),
-        env: z.record(z.string()).optional(),
-        replaceEnv: z.boolean().optional(),
-        rawScript: z.boolean().optional(),
-      }),
-      execute: async ({
-        command,
-        cwd,
-        stdin,
-        args,
-        env,
-        replaceEnv,
-        rawScript,
-      }) => {
-        const bash = await getBash();
-        const result = await bash.exec(command, {
-          cwd,
-          stdin,
-          args,
-          env,
-          replaceEnv,
-          rawScript,
-        });
-        await syncWritableBack(bash);
-        logEvent(ctx, "bash", command.slice(0, 120), "ok", {
-          exitCode: result.exitCode,
-          source: "agent",
-        });
-        return {
-          stdout: result.stdout,
-          stderr: result.stderr,
-          exitCode: result.exitCode,
-        };
-      },
+    ls: tool({
+      description: "List entries in a VFS path",
+      inputSchema: z.object({ path: z.string().optional() }),
+      execute: async ({ path }) => ops.ls(path),
+    }),
+    cat: tool({
+      description: "Read a file from VFS",
+      inputSchema: z.object({ path: z.string() }),
+      execute: async ({ path }) => ops.cat(path),
+    }),
+    write: tool({
+      description: "Write content to a writable VFS path",
+      inputSchema: z.object({ path: z.string(), content: z.string() }),
+      execute: async ({ path, content }) => ops.write(path, content),
+    }),
+    mkdir: tool({
+      description: "Create a directory path in writable roots",
+      inputSchema: z.object({ path: z.string() }),
+      execute: async ({ path }) => ops.mkdir(path),
+    }),
+    rm: tool({
+      description: "Remove a file in writable roots",
+      inputSchema: z.object({ path: z.string() }),
+      execute: async ({ path }) => ops.rm(path),
+    }),
+    find: tool({
+      description: "Find files recursively from a root path",
+      inputSchema: z.object({ path: z.string().optional() }),
+      execute: async ({ path }) => ops.find(path),
+    }),
+    grep: tool({
+      description: "Search file lines by regex pattern",
+      inputSchema: z.object({ pattern: z.string(), path: z.string().optional() }),
+      execute: async ({ pattern, path }) => ops.grep(pattern, path),
     }),
   };
 }
@@ -272,19 +230,9 @@ const app = new Elysia()
   )
   .get("/health/live", () => ({ status: "ok" }))
   .get("/health/ready", async () => {
-    const redisOk = await redis
-      .ping()
-      .then((v) => v === "PONG")
-      .catch(() => false);
-    const qdrantOk = await qdrant
-      .getCollections()
-      .then(() => true)
-      .catch(() => false);
     const dbOk = db.query("SELECT 1 as ok").get() as { ok: number };
     return {
-      status: redisOk && qdrantOk && dbOk.ok === 1 ? "ready" : "degraded",
-      redis: redisOk,
-      qdrant: qdrantOk,
+      status: dbOk.ok === 1 ? "ready" : "degraded",
       sqlite: dbOk.ok === 1,
     };
   })
@@ -326,6 +274,24 @@ const app = new Elysia()
     { body: t.Object({ path: t.String(), content: t.String() }) },
   )
   .post(
+    "/tools/mkdir",
+    async ({ body, headers }) => {
+      const s = sessionFromHeaders(headers);
+      const ops = createOperations(s);
+      return ops.mkdir(body.path);
+    },
+    { body: t.Object({ path: t.String() }) },
+  )
+  .post(
+    "/tools/rm",
+    async ({ body, headers }) => {
+      const s = sessionFromHeaders(headers);
+      const ops = createOperations(s);
+      return ops.rm(body.path);
+    },
+    { body: t.Object({ path: t.String() }) },
+  )
+  .post(
     "/tools/find",
     async ({ body, headers }) => {
       const s = sessionFromHeaders(headers);
@@ -335,25 +301,19 @@ const app = new Elysia()
     { body: t.Object({ path: t.Optional(t.String()) }) },
   )
   .post(
-    "/tools/grep",
-    async ({ body, headers }) => {
-      const s = sessionFromHeaders(headers);
-      const ops = createOperations(s);
-      const result = await ops.grep(body.pattern, body.path);
-      return { matches: result.matches };
-    },
-    { body: t.Object({ pattern: t.String(), path: t.Optional(t.String()) }) },
-  )
-  .post(
     "/chat/agent",
     async ({ body, headers, set }) => {
+      if (!env.ANTHROPIC_API_KEY) {
+        set.status = 400;
+        return { error: "ANTHROPIC_API_KEY is required for /chat/agent" };
+      }
       const s = sessionFromHeaders(headers);
       const prompt = body.message.trim();
       try {
         const agent = new ToolLoopAgent({
           model: anthropic("claude-haiku-4-5"),
           instructions:
-            "You are a filesystem agent for a virtual FS. Use tools to inspect or modify data when needed. Keep replies short and actionable.",
+            "You are a VFS assistant. Use tools for exact filesystem operations and keep responses concise.",
           tools: createAgentTools(s),
           stopWhen: stepCountIs(8),
         });
@@ -376,30 +336,27 @@ const app = new Elysia()
           })),
         };
       } catch (error) {
-        const err = error as Error & {
-          cause?: unknown;
-          data?: unknown;
-          statusCode?: number;
-        };
-        const errorDetails = {
+        const err = error as Error;
+        logEvent(s, "agent", prompt.slice(0, 120), "error", {
           name: err.name,
           message: err.message,
           stack: err.stack,
-          cause: err.cause,
-          data: err.data,
-          statusCode: err.statusCode,
-        };
-        logEvent(s, "agent", prompt.slice(0, 120), "error", errorDetails);
+        });
         set.status = 500;
-        return {
-          error: err.message,
-          details: errorDetails,
-          answer: "",
-          steps: [],
-        };
+        return { error: err.message, answer: "", steps: [] };
       }
     },
     { body: t.Object({ message: t.String() }) },
+  )
+  .post(
+    "/tools/grep",
+    async ({ body, headers }) => {
+      const s = sessionFromHeaders(headers);
+      const ops = createOperations(s);
+      const result = await ops.grep(body.pattern, body.path);
+      return { matches: result.matches };
+    },
+    { body: t.Object({ pattern: t.String(), path: t.Optional(t.String()) }) },
   )
   .listen(env.PORT);
 
@@ -408,7 +365,6 @@ console.log(
 );
 
 const shutdown = async () => {
-  redis.close();
   db.close();
   process.exit(0);
 };

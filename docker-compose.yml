@@ -1,41 +1,4 @@
 services:
-  qdrant:
-    image: qdrant/qdrant:v1.17.0
-    restart: unless-stopped
-    volumes:
-      - qdrant_data:/qdrant/storage
-    networks:
-      - backend
-
-  redis:
-    image: redis:7.4-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-    networks:
-      - backend
-
-  indexer:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    restart: "no"
-    command: ["bun", "scripts/index-demo-docs.ts"]
-    environment:
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: vfs_demo_docs
-    depends_on:
-      qdrant:
-        condition: service_started
-    networks:
-      - backend
-
   vfs-app:
     build:
       context: .
@@ -43,21 +6,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env.local
-    depends_on:
-      qdrant:
-        condition: service_started
-      redis:
-        condition: service_healthy
-      indexer:
-        condition: service_completed_successfully
     environment:
       PORT: 3000
-      REDIS_URL: redis://redis:6379
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_COLLECTION: vfs_demo_docs
       SQLITE_PATH: /data/vfs-demo.db
       DEFAULT_ROLE: admin
-      ENABLE_VECTOR_SEARCH: "false"
     volumes:
       - app_data:/data
     ports:
@@ -71,8 +23,6 @@ services:
       - backend
 
 volumes:
-  qdrant_data:
-  redis_data:
   app_data:
 
 networks:

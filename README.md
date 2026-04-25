@@ -1,70 +1,57 @@
-# agent-fs-control-plane
+# vfs-demo
 
-AI agent architecture pattern for cheaper, exact, auditable data operations at scale.
+POSIX-first virtual filesystem runtime for AI and automation tools.
 
-## The point
+This project focuses on deterministic, policy-enforced filesystem operations.  
+It does not depend on vector databases, embeddings, or RAG to be useful.
 
-Use semantic retrieval to narrow candidates, then deterministic tools to do exact work.
+## Why this exists
 
-- Semantic search is good for discovery.
-- Deterministic tools are good for exact matches and writes.
+Most agent systems eventually need exact file operations, predictable behavior, and auditability.
 
-This reduces wasted model/tool loops and improves reliability. You do not need per-task VMs or heavyweight sandbox orchestration anymore after this.
+This project provides a portable VFS contract that can be reused across stacks:
 
-## Money-first (realistic)
+- POSIX-style operations for exact reads and writes
+- strict path boundaries
+- role-based access controls
+- auditable tool execution
 
-At scale, biggest costs are model tokens, retries, retrieval misses, and ops/debug overhead.
+## Core scope
 
-Typical improvement ranges teams target with this pattern:
+In scope:
 
-- `10-25%` lower token spend (better routing + fewer failed loops)
-- `15-35%` lower retrieval/cache waste (deterministic path access)
-- `20-40%` lower ops toil (auditable runs, easier debugging)
+- virtual roots and path policy
+- POSIX-style tool endpoints (`ls`, `cat`, `write`, `mkdir`, `rm`)
+- role-based access (`reader`, `editor`)
+- operation audit trail
 
-Realistic combined annual savings in mature programs: often `20-35%` total platform spend.  
-This is not automatic; results depend on baseline quality and rollout execution.
+Out of scope in core:
 
-### Example numbers
+- vector databases
+- embedding/indexing pipelines
+- retrieval orchestration
+- RAG-specific logic
 
-If baseline is `$5.0M/year`:
-
-- model: `$3.2M`
-- retrieval/cache: `$1.1M`
-- ops overhead: `$0.7M`
-
-After improvements:
-
-- model: `$2.62M`
-- retrieval/cache: `$0.86M`
-- ops: `$0.50M`
-- total: `$3.98M` (`$1.02M/year` saved, `20.4%`)
-
-## RAG vs this pattern
-
-- Plain RAG: more flexible, less predictable.
-- This pattern: more predictable, more auditable, better for exact operations.
-
-Best practice is hybrid:
-
-- RAG for discovery
-- deterministic tools for exact read/write actions
-
-## What this demo includes
-
-- `Bun` + `Elysia` API
-- `Qdrant` (`/kb` read-heavy knowledge)
-- `SQLite` (`/workspace`, `/memory`, `/scratch` writable state)
-- `Redis` cache
-- `AI SDK ToolLoopAgent` + `just-bash`
+Those can be integrated later by materializing content into VFS roots (for example under `/kb`).
 
 ## Virtual filesystem model
 
-- `/kb` = read-only knowledge
-- `/workspace`, `/memory`, `/scratch` = writable tenant-scoped areas
+- `/kb` = read-only knowledge root
+- `/workspace`, `/memory`, `/scratch` = writable tenant-scoped roots
+
+## API shape
+
+Tool-style endpoints under `/tools/*` provide deterministic POSIX-like operations.
+
+Example operations:
+
+- `POST /tools/ls`
+- `POST /tools/cat`
+- `POST /tools/write`
+- `POST /tools/mkdir`
+- `POST /tools/rm`
 
 ## Run locally
-
-Set `ANTHROPIC_API_KEY` in `.env.local`, then:
 
 ```bash
 docker compose up -d --build
@@ -92,22 +79,22 @@ curl -X POST http://localhost:3000/tools/cat \
 ```
 
 ```bash
-curl -X POST http://localhost:3000/chat/agent \
+curl -X POST http://localhost:3000/tools/write \
   -H "content-type: application/json" \
   -H "x-role: editor" \
-  -d "{\"message\":\"Find docs about grep and write a short summary to /workspace/notes/grep-summary.txt\"}"
+  -d "{\"path\":\"/workspace/notes/hello.txt\",\"content\":\"hello from vfs\"}"
 ```
 
-## Seed data
+## Integration model
 
-Edit: `data/sources/demo/preembedded/points.json`
+This VFS can be plugged into projects that use RAG, vector DBs, search, or custom ingestion.
 
-Re-index:
+Recommended boundary:
 
-```bash
-docker compose run --rm indexer
-```
+- external systems discover/retrieve content
+- content is mounted or written into VFS roots
+- agents and tools operate through deterministic POSIX-like VFS endpoints
 
 ## Security note
 
-`just-bash` is sandboxed and in-memory by default, and writable sync-back is limited to VFS writable roots.
+Write operations are restricted to writable roots, path traversal is blocked, and access is controlled by role.

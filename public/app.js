@@ -13,24 +13,31 @@ function App() {
   const [status, setStatus] = useState("ready");
   const [output, setOutput] = useState("");
   const [role, setRole] = useState("editor");
-  const [agentPrompt, setAgentPrompt] = useState("Summarize what is under /kb/docs and write a short note to /workspace/notes/summary.txt");
+  const [tool, setTool] = useState("ls");
+  const [path, setPath] = useState("/");
+  const [pattern, setPattern] = useState("vfs");
+  const [content, setContent] = useState("hello from vfs");
 
   const headers = useMemo(() => ({ ...defaultHeaders, "x-role": role }), [role]);
 
-  async function runAgent() {
-    setStatus("running agent...");
+  async function runTool(event) {
+    event.preventDefault();
+    setStatus(`running ${tool}...`);
+    const body = { path };
+    if (tool === "write") body.content = content;
+    if (tool === "grep") body.pattern = pattern;
     try {
-      const res = await fetch("/chat/agent", {
+      const res = await fetch(`/tools/${tool}`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ message: agentPrompt })
+        body: JSON.stringify(body)
       });
       const json = await res.json();
       setOutput(JSON.stringify(json, null, 2));
-      setStatus(res.ok ? "agent ok" : "agent failed");
+      setStatus(res.ok ? `${tool} ok` : `${tool} failed`);
     } catch (error) {
       setOutput(String(error));
-      setStatus("agent failed");
+      setStatus(`${tool} failed`);
     }
   }
 
@@ -51,18 +58,37 @@ function App() {
       ),
       React.createElement("div", { className: "grid" },
         React.createElement("div", { className: "card full" },
-          React.createElement("h2", null, "agent"),
+          React.createElement("h2", null, "POSIX-like VFS tool"),
           React.createElement("form", {
-            onSubmit: (e) => {
-              e.preventDefault();
-              void runAgent();
-            }
+            onSubmit: (e) => void runTool(e)
           },
-            React.createElement("textarea", {
-              value: agentPrompt,
-              onChange: (e) => setAgentPrompt(e.target.value)
+            React.createElement("select", {
+              value: tool,
+              onChange: (e) => setTool(e.target.value)
+            },
+              React.createElement("option", { value: "ls" }, "ls"),
+              React.createElement("option", { value: "cat" }, "cat"),
+              React.createElement("option", { value: "write" }, "write"),
+              React.createElement("option", { value: "mkdir" }, "mkdir"),
+              React.createElement("option", { value: "rm" }, "rm"),
+              React.createElement("option", { value: "find" }, "find"),
+              React.createElement("option", { value: "grep" }, "grep")
+            ),
+            React.createElement("input", {
+              value: path,
+              onChange: (e) => setPath(e.target.value),
+              placeholder: "/workspace/notes/hello.txt"
             }),
-            React.createElement("button", { type: "submit" }, "Run agent")
+            tool === "grep" && React.createElement("input", {
+              value: pattern,
+              onChange: (e) => setPattern(e.target.value),
+              placeholder: "pattern"
+            }),
+            tool === "write" && React.createElement("textarea", {
+              value: content,
+              onChange: (e) => setContent(e.target.value)
+            }),
+            React.createElement("button", { type: "submit" }, "Run tool")
           )
         ),
         React.createElement("div", { className: "card full" },
